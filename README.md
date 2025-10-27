@@ -4,11 +4,23 @@ Azure API Manager経由でAzure OpenAI APIを使用するAzureの設定を行う
 
 # 条件
 
-10名ほどのチームメンバーにAPIでAzure OpenAI APIを利用する環境を提供したい。
-元々Azure OpenAI APIを直接使用しているため、AIモデルはデプロイ済み。クライアントソフトウェアの互換性を保つため、APIM経由で利用する際も直接利用する場合と透過的に利用したい。
-プロンプトキャッシュを活用するため２～３名ぐらいのユーザーごとに使用するOpenAIデプロイモデルを固定的に割り当てたい。
-特定のIPアドレスのみAPIMにアクセスできるようにip-filterを設定したい。
-APIMのプランはconsumption planを使用する。そのため開発者ポータルやVNETを使えない。
+1. 10名ほどのチームメンバーにAPIでAzure OpenAI APIを利用する環境を提供したい。
+2. 元々Azure OpenAI APIを直接使用しているため、AIモデルはデプロイ済み。クライアントソフトウェアの互換性を保つため、APIM経由で利用する際も直接利用する場合と透過的に利用したい。
+3. プロンプトキャッシュを活用するため２～３名ぐらいのユーザーごとに使用するOpenAIデプロイモデルを固定的に割り当てたい。
+
+| User | Key | APIM endpoint | AOAI endpoint |
+| --- | --- | --- | --- |
+| A | Key A | Same endpoint | endpoint 1 |
+| B | Key B | Same endpoint | endpoint 1 |
+| C | Key C | Same endpoint | endpoint 1 |
+| D | Key D | Same endpoint | endpoint 2 |
+| E | Key E | Same endpoint | endpoint 2 |
+| F | Key F | Same endpoint | endpoint 3 |
+| G | Key G | Same endpoint | endpoint 3 |
+
+4. 特定のIPアドレスのみAPIMにアクセスできるようにip-filterを設定したい。
+5. APIMのプランはconsumption planを使用する。そのため開発者ポータルやVNETを使えない。
+6. Azure上にユーザーアカウントを作成せず、ユーザー毎にAPI Keyを発行する。
 
 ## Azure CLIによる設定手順
 
@@ -158,19 +170,28 @@ done
 クライアント側では既存と同じ `api-key` ヘッダを使い続けられるよう、APIMで発行したサブスクリプションキー値だけ差し替えてもらう。
 
 ### 5. ポリシーの適用（リクエスト透過化 + IP制限）
-`policy.xml`（例）をローカルに用意し、APIM APIへ適用する。IP制限は許可アドレス列挙後に `forbid` を指定する。
-```xml
+環境変数で値を差し込みながら `cat` で `policy-${GROUP_NAME}.xml` を生成し、APIM APIへ適用する。IP制限は許可アドレス列挙後に `forbid` を指定する。
+```bash
+export GROUP_NAME="team-a"
+export AOAI_DEPLOYMENT_NAME="gpt-4o"
+export POLICY_PATH="policy-${GROUP_NAME}.xml"
+export POLICY_ALLOW_XML="$(cat <<'EOS'
+    <address>203.0.113.10</address>
+    <address>198.51.100.0/24</address>
+EOS
+)"
+
+cat <<EOF > "$POLICY_PATH"
 <policies>
   <inbound>
     <base />
     <ip-filter action="allow">
-      <address>203.0.113.10</address>
-      <address>198.51.100.0/24</address>
+$POLICY_ALLOW_XML
     </ip-filter>
     <ip-filter action="forbid" />
-    <set-backend-service base-url="{{openai-endpoint}}openai/deployments/{{deployment-name}}/" />
+    <set-backend-service base-url="{{openai-endpoint}}openai/deployments/${AOAI_DEPLOYMENT_NAME}/" />
     <set-header name="api-key" exists-action="override">
-      <value>{{openai-api-key-team-a}}</value>
+      <value>{{openai-api-key-${GROUP_NAME}}}</value>
     </set-header>
   </inbound>
   <backend>
@@ -183,8 +204,9 @@ done
     <base />
   </on-error>
 </policies>
+EOF
 ```
-ポリシー内の `{{deployment-name}}` と `{{openai-api-key-team-a}}` は対象グループに合わせて置換する（例: `team-b` の場合は `{{openai-api-key-team-b}}`）。CLIで適用する例:
+`POLICY_ALLOW_XML` にIPアドレス要素を追加し、`AOAI_DEPLOYMENT_NAME` と `GROUP_NAME` は対象グループに合わせて置換する（例: `team-b` の場合は `{{openai-api-key-team-b}}` が生成される）。CLIで適用する例:
 ```bash
 az apim api policy create \
   --resource-group "$RG_NAME" \
@@ -196,24 +218,28 @@ az apim api policy create \
 `set-backend-service` に末尾スラッシュを付与しておくことで、クライアントから受け取った相対パスをそのままバックエンドに引き渡しても二重パスにならない。
 
 ### 6. 利用者管理とサブスクリプションキーの発行
-- 開発者ポータルが使えないため、CLIでユーザーを作成しProductへ割り当てる。  
+- APIMユーザーリソースを作成せず、Productに対するスタンドアロンサブスクリプションを発行する。  
   ```bash
-  az apim user create \
+  az apim subscription create \
     --resource-group "$RG_NAME" \
     --service-name "$APIM_NAME" \
-    --user-id "user-jane" \
-    --first-name "Jane" \
-    --last-name "Doe" \
-    --email "jane.doe@example.com"
-
-  az apim product subscription create \
-    --resource-group "$RG_NAME" \
-    --service-name "$APIM_NAME" \
-    --product-id "$PRODUCT_ID" \
-    --name "sub-${GROUP_NAME}-jane" \
-    --user-id "user-jane"
+    --scope "/products/${PRODUCT_ID}" \
+    --display-name "sub-${GROUP_NAME}-alice" \
+    --state active
   ```
-- 発行されたキーは `az apim product subscription show` で取得し、社内の安全な手段で配布する。
+  `--scope` は Product 単位で指定する。必要に応じて `--allow-tracing` や `--primary-key` を明示できる。
+- 発行されたキーは `az apim subscription show --sid <subscription-id>` または作成コマンドの戻り値から `primaryKey` `secondaryKey` を取得し、社内の安全な手段で配布する。誰のキーか分かるよう `--display-name` に利用者情報を含めて台帳を管理する。
+
+#### フロー図
+```mermaid
+flowchart LR
+  Client["Client<br>APIMサブスクリプションキー (例: sub-team-a-alice)"] -- HTTPSリクエスト --> APIM["APIM API<br>/openai/team-a"]
+  APIM -- Product紐付け --> Product["Product team-a"]
+  APIM -- ポリシー解決 --> NV["Named Value<br>openai-api-key-team-a"]
+  APIM -- set-backend-service --> AOAI["Azure OpenAI Deployment<br>gpt-4o (team-a)"]
+  NV -- set-header api-key --> AOAI
+  AOAI -- 応答 --> APIM -- 応答転送 --> Client
+```
 
 ### 7. 動作確認と監視
 - `curl` などでAPIM経由のリクエストを実行し、既存のAzure OpenAIと同等のレスポンスを返すことを確認する。
