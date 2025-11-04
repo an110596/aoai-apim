@@ -1,0 +1,26 @@
+{
+  "name": "aoai-apim",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/aoai-apim,type=bind",
+  "workspaceFolder": "/workspaces/aoai-apim",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/azure-cli:1": {
+      "version": "latest"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      },
+      "extensions": [
+        "ms-azuretools.vscode-azureresources",
+        "ms-vscode.azure-account"
+      ]
+    }
+  },
+  "postCreateCommand": "az extension add --name apim || az extension update --name apim",
+  "remoteUser": "root"
+}

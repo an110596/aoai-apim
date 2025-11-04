@@ -1,0 +1,15 @@
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are an assistant that provides concise status summaries."
+    },
+    {
+      "role": "user",
+      "content": "Summarize the latest deployment status for project Aurora in 3 bullet points."
+    }
+  ],
+  "temperature": 0.2,
+  "max_tokens": 256,
+  "top_p": 0.95
+}

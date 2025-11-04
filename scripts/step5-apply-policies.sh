@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+# Applies per-group APIM policies with IP restrictions and backend/key forwarding.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+STEP1_SCRIPT="${SCRIPT_DIR}/step1-params.sh"
+
+if [[ ! -f "${STEP1_SCRIPT}" ]]; then
+  echo "Step 1 script not found at ${STEP1_SCRIPT}." >&2
+  exit 1
+fi
+
+# Source Step 1 parameters so the required exports are available.
+# shellcheck source=/dev/null
+if ! source "${STEP1_SCRIPT}"; then
+  echo "Failed to source ${STEP1_SCRIPT}. Fix the errors above before rerunning." >&2
+  exit 1
+fi
+
+if ! command -v az >/dev/null 2>&1; then
+  echo "Azure CLI (az) is required but not found in PATH." >&2
+  exit 1
+fi
+
+REQUIRED_VARS=(RG_NAME APIM_NAME MODEL_GROUPS)
+for var in "${REQUIRED_VARS[@]}"; do
+  if [[ -z "${!var:-}" ]]; then
+    echo "Environment variable ${var} is empty. Update scripts/step1-params.sh and source it again." >&2
+    exit 1
+  fi
+done
+
+if [[ ${#MODEL_GROUPS[@]} -eq 0 ]]; then
+  echo "MODEL_GROUPS is empty; specify at least one group in scripts/step1-params.sh." >&2
+  exit 1
+fi
+
+get_optional_value() {
+  local array_name="$1"
+  local key="$2"
+  if declare -p "$array_name" >/dev/null 2>&1; then
+    local value
+    eval "value=\"\${$array_name[$key]:-}\""
+    if [[ -n "$value" ]]; then
+      printf '%s' "$value"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+emit_optional_block() {
+  local indent="$1"
+  local content="$2"
+  if [[ -z "$content" ]]; then
+    return 0
+  fi
+  while IFS= read -r line; do
+    if [[ -z "$line" ]]; then
+      printf '\n'
+    else
+      printf '%s%s\n' "$indent" "$line"
+    fi
+  done <<< "$content"
+}
+
+for group in "${MODEL_GROUPS[@]}"; do
+  service_url="${MODEL_SERVICE_URLS[$group]:-}"
+  if [[ -z "$service_url" ]]; then
+    echo "MODEL_SERVICE_URLS[$group] is empty. Run Step 1 again." >&2
+    exit 1
+  fi
+  if [[ "$service_url" == *"<"*">"* ]]; then
+    echo "MODEL_SERVICE_URLS[$group] still contains placeholder brackets. Update scripts/step1-params.sh." >&2
+    exit 1
+  fi
+
+  allowed_ips="${MODEL_ALLOWED_IPS[$group]:-}"
+  if [[ -z "$allowed_ips" ]]; then
+    echo "MODEL_ALLOWED_IPS[$group] is empty. Update scripts/step1-params.sh." >&2
+    exit 1
+  fi
+  read -r -a allowed_entries <<< "$allowed_ips"
+  if [[ ${#allowed_entries[@]} -eq 0 ]]; then
+    echo "MODEL_ALLOWED_IPS[$group] has no entries after parsing." >&2
+    exit 1
+  fi
+
+  if ! api_id=$(get_optional_value MODEL_API_IDS "$group"); then
+    api_id="aoai-${group}"
+  fi
+
+  if ! az apim api show --resource-group "$RG_NAME" --service-name "$APIM_NAME" --api-id "$api_id" >/dev/null 2>&1; then
+    echo "API ${api_id} not found in APIM ${APIM_NAME}. Ensure Step 4 completed successfully." >&2
+    exit 1
+  fi
+
+  policy_file="$(mktemp)"
+  trap 'rm -f "$policy_file"' EXIT
+
+  {
+    printf '<policies>\n'
+    printf '  <inbound>\n'
+    printf '    <base />\n'
+    printf '    <ip-filter action="allow">\n'
+    for ip in "${allowed_entries[@]}"; do
+      printf '      <address>%s</address>\n' "$ip"
+    done
+    printf '    </ip-filter>\n'
+    printf '    <ip-filter action="forbid" />\n'
+    printf '    <set-backend-service base-url="{{openai-service-url-%s}}" />\n' "$group"
+    printf '    <set-header name="api-key" exists-action="override">\n'
+    printf '      <value>{{openai-api-key-%s}}</value>\n' "$group"
+    printf '    </set-header>\n'
+    emit_optional_block "    " "${MODEL_POLICY_EXTRA_INBOUND[$group]:-}"
+    printf '  </inbound>\n'
+    printf '  <backend>\n'
+    printf '    <base />\n'
+    emit_optional_block "    " "${MODEL_POLICY_EXTRA_BACKEND[$group]:-}"
+    printf '  </backend>\n'
+    printf '  <outbound>\n'
+    printf '    <base />\n'
+    emit_optional_block "    " "${MODEL_POLICY_EXTRA_OUTBOUND[$group]:-}"
+    printf '  </outbound>\n'
+    printf '  <on-error>\n'
+    printf '    <base />\n'
+    emit_optional_block "    " "${MODEL_POLICY_EXTRA_ON_ERROR[$group]:-}"
+    printf '  </on-error>\n'
+    printf '</policies>\n'
+  } > "$policy_file"
+
+  printf 'Applying policy for API %s (group %s)...\n' "$api_id" "$group"
+  az apim api policy set \
+    --resource-group "$RG_NAME" \
+    --service-name "$APIM_NAME" \
+    --api-id "$api_id" \
+    --value @"$policy_file" \
+    --if-match "*"
+
+  rm -f "$policy_file"
+  trap - EXIT
+done
+
+printf 'Policies applied for groups: %s\n' "${MODEL_GROUPS[*]}"
