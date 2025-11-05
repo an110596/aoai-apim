@@ -23,6 +23,20 @@ if ! command -v az >/dev/null 2>&1; then
   exit 1
 fi
 
+SUBSCRIPTION_ID="${AZURE_SUBSCRIPTION_ID:-}"
+if [[ -z "$SUBSCRIPTION_ID" ]]; then
+  if ! SUBSCRIPTION_ID="$(az account show --query id -o tsv 2>/dev/null)"; then
+    echo "Unable to determine subscription ID. Set AZURE_SUBSCRIPTION_ID or run 'az account set'." >&2
+    exit 1
+  fi
+  if [[ -z "$SUBSCRIPTION_ID" ]]; then
+    echo "Subscription ID resolved to empty. Set AZURE_SUBSCRIPTION_ID." >&2
+    exit 1
+  fi
+fi
+
+APIM_SUBSCRIPTION_API_VERSION="${APIM_SUBSCRIPTION_API_VERSION:-2023-05-01-preview}"
+
 REQUIRED_VARS=(RG_NAME APIM_NAME MODEL_GROUPS)
 for var in "${REQUIRED_VARS[@]}"; do
   if [[ -z "${!var:-}" ]]; then
@@ -114,46 +128,48 @@ for group in "${MODEL_GROUPS[@]}"; do
 
     scope="/products/${product_id}"
 
-    if az apim subscription show --resource-group "$RG_NAME" --service-name "$APIM_NAME" --subscription-id "$subscription_id" >/dev/null 2>&1; then
+    subscription_uri="https://management.azure.com/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}/providers/Microsoft.ApiManagement/service/${APIM_NAME}/subscriptions/${subscription_id}?api-version=${APIM_SUBSCRIPTION_API_VERSION}"
+
+    set +e
+    az rest --method get --uri "$subscription_uri" >/dev/null 2>&1
+    get_status=$?
+    set -e
+    if [[ $get_status -eq 0 ]]; then
       printf 'Updating subscription %s (group %s)...\n' "$subscription_id" "$group"
-      cmd=(
-        az apim subscription update
-        --resource-group "$RG_NAME"
-        --service-name "$APIM_NAME"
-        --subscription-id "$subscription_id"
-        --display-name "$display_name"
-        --state "$state"
-        --scope "$scope"
-      )
-      if [[ -n "$primary" ]]; then
-        cmd+=(--primary-key "$primary")
-      fi
-      if [[ -n "$secondary" ]]; then
-        cmd+=(--secondary-key "$secondary")
-      fi
-      "${cmd[@]}" >/dev/null
     else
       printf 'Creating subscription %s (group %s)...\n' "$subscription_id" "$group"
-      cmd=(
-        az apim subscription create
-        --resource-group "$RG_NAME"
-        --service-name "$APIM_NAME"
-        --subscription-id "$subscription_id"
-        --scope "$scope"
-        --display-name "$display_name"
-        --state "$state"
-      )
-      if [[ -n "$primary" ]]; then
-        cmd+=(--primary-key "$primary")
-      fi
-      if [[ -n "$secondary" ]]; then
-        cmd+=(--secondary-key "$secondary")
-      fi
-      "${cmd[@]}" >/dev/null
     fi
 
-    primary_key=$(az apim subscription show --resource-group "$RG_NAME" --service-name "$APIM_NAME" --subscription-id "$subscription_id" --query "properties.primaryKey" -o tsv)
-    secondary_key=$(az apim subscription show --resource-group "$RG_NAME" --service-name "$APIM_NAME" --subscription-id "$subscription_id" --query "properties.secondaryKey" -o tsv)
+    payload_file="$(mktemp)"
+    trap 'rm -f "$payload_file"' EXIT
+
+    {
+      printf '{'
+      printf '"properties":{'
+      printf '"displayName":"%s",' "$(printf '%s' "$display_name" | sed 's/"/\\"/g')"
+      printf '"scope":"%s",' "$(printf '%s' "$scope" | sed 's/"/\\"/g')"
+      printf '"state":"%s"' "$(printf '%s' "$state" | sed 's/"/\\"/g')"
+      if [[ -n "$primary" ]]; then
+        printf ',"primaryKey":"%s"' "$(printf '%s' "$primary" | sed 's/"/\\"/g')"
+      fi
+      if [[ -n "$secondary" ]]; then
+        printf ',"secondaryKey":"%s"' "$(printf '%s' "$secondary" | sed 's/"/\\"/g')"
+      fi
+      printf '}'
+      printf '}'
+    } >"$payload_file"
+
+    az rest \
+      --method put \
+      --uri "$subscription_uri" \
+      --body @"$payload_file" \
+      --headers "Content-Type=application/json" >/dev/null
+
+    rm -f "$payload_file"
+    trap - EXIT
+
+    primary_key=$(az rest --method get --uri "$subscription_uri" --query "properties.primaryKey" -o tsv)
+    secondary_key=$(az rest --method get --uri "$subscription_uri" --query "properties.secondaryKey" -o tsv)
 
     printf '  Display Name: %s\n' "$display_name"
     printf '  Subscription ID: %s\n' "$subscription_id"

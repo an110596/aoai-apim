@@ -23,6 +23,20 @@ if ! command -v az >/dev/null 2>&1; then
   exit 1
 fi
 
+SUBSCRIPTION_ID="${AZURE_SUBSCRIPTION_ID:-}"
+if [[ -z "$SUBSCRIPTION_ID" ]]; then
+  if ! SUBSCRIPTION_ID="$(az account show --query id -o tsv 2>/dev/null)"; then
+    echo "Unable to determine subscription ID. Set AZURE_SUBSCRIPTION_ID or run 'az account set'." >&2
+    exit 1
+  fi
+  if [[ -z "$SUBSCRIPTION_ID" ]]; then
+    echo "Subscription ID resolved to empty. Set AZURE_SUBSCRIPTION_ID." >&2
+    exit 1
+  fi
+fi
+
+APIM_POLICY_API_VERSION="${APIM_POLICY_API_VERSION:-2023-05-01-preview}"
+
 REQUIRED_VARS=(RG_NAME APIM_NAME MODEL_GROUPS)
 for var in "${REQUIRED_VARS[@]}"; do
   if [[ -z "${!var:-}" ]]; then
@@ -131,12 +145,12 @@ for group in "${MODEL_GROUPS[@]}"; do
   } > "$policy_file"
 
   printf 'Applying policy for API %s (group %s)...\n' "$api_id" "$group"
-  az apim api policy set \
-    --resource-group "$RG_NAME" \
-    --service-name "$APIM_NAME" \
-    --api-id "$api_id" \
-    --value @"$policy_file" \
-    --if-match "*"
+  policy_uri="https://management.azure.com/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}/providers/Microsoft.ApiManagement/service/${APIM_NAME}/apis/${api_id}/policies/policy?api-version=${APIM_POLICY_API_VERSION}"
+  az rest \
+    --method put \
+    --uri "$policy_uri" \
+    --headers "Content-Type=application/vnd.ms-azure-apim.policy+xml" \
+    --body @"$policy_file" >/dev/null
 
   rm -f "$policy_file"
   trap - EXIT

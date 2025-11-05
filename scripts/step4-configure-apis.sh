@@ -85,7 +85,11 @@ for group in "${MODEL_GROUPS[@]}"; do
       --resource-group "$RG_NAME" \
       --service-name "$APIM_NAME" \
       --api-id "$api_id" \
-      --set displayName="$display_name" path="$api_path" serviceUrl="$service_url" subscriptionKeyParameterNames.header='api-key' protocols='["https"]'
+      --display-name "$display_name" \
+      --path "$api_path" \
+      --service-url "$service_url" \
+      --protocols https \
+      --subscription-key-header-name "api-key"
   else
     printf 'Creating API %s...\n' "$api_id"
     az apim api create \
@@ -96,7 +100,7 @@ for group in "${MODEL_GROUPS[@]}"; do
       --path "$api_path" \
       --protocols https \
       --service-url "$service_url" \
-      --subscription-key-parameter-names header='api-key'
+      --subscription-key-header-name "api-key"
   fi
 
   if az apim product show --resource-group "$RG_NAME" --service-name "$APIM_NAME" --product-id "$product_id" >/dev/null 2>&1; then
@@ -105,19 +109,21 @@ for group in "${MODEL_GROUPS[@]}"; do
       --resource-group "$RG_NAME" \
       --service-name "$APIM_NAME" \
       --product-id "$product_id" \
-      --set displayName="$product_display_name" approvalRequired=false subscriptionsLimit=1
+      --product-name "$product_display_name" \
+      --approval-required false \
+      --subscriptions-limit 1
   else
     printf 'Creating Product %s...\n' "$product_id"
     az apim product create \
       --resource-group "$RG_NAME" \
       --service-name "$APIM_NAME" \
       --product-id "$product_id" \
-      --display-name "$product_display_name" \
+      --product-name "$product_display_name" \
       --approval-required false \
       --subscriptions-limit 1
   fi
 
-  if az apim product api show --resource-group "$RG_NAME" --service-name "$APIM_NAME" --product-id "$product_id" --api-id "$api_id" >/dev/null 2>&1; then
+  if az apim product api check --resource-group "$RG_NAME" --service-name "$APIM_NAME" --product-id "$product_id" --api-id "$api_id" >/dev/null 2>&1; then
     printf 'API %s already linked to product %s.\n' "$api_id" "$product_id"
   else
     printf 'Linking API %s to product %s...\n' "$api_id" "$product_id"

@@ -51,7 +51,9 @@ create_or_update_nv() {
       --resource-group "$RG_NAME" \
       --service-name "$APIM_NAME" \
       --named-value-id "$id" \
-      --set value="$value" secret=$secret_flag displayName="$display_name"
+      --value "$value" \
+      --secret "$secret_flag" \
+      --set "displayName=$display_name"
   else
     printf 'Creating Named Value %s...\n' "$id"
     az apim nv create \
