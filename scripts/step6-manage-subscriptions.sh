@@ -36,6 +36,7 @@ if [[ -z "$SUBSCRIPTION_ID" ]]; then
 fi
 
 APIM_SUBSCRIPTION_API_VERSION="${APIM_SUBSCRIPTION_API_VERSION:-2023-05-01-preview}"
+APIM_USER_API_VERSION="${APIM_USER_API_VERSION:-2023-05-01-preview}"
 
 REQUIRED_VARS=(RG_NAME APIM_NAME MODEL_GROUPS)
 for var in "${REQUIRED_VARS[@]}"; do
@@ -49,6 +50,20 @@ if [[ ${#MODEL_GROUPS[@]} -eq 0 ]]; then
   echo "MODEL_GROUPS is empty; specify at least one group in scripts/step1-params.sh." >&2
   exit 1
 fi
+
+REQUIRED_ASSOC_ARRAYS=(
+  MODEL_SUBSCRIPTION_USER_IDS
+  MODEL_APIM_USER_EMAILS
+  MODEL_APIM_USER_ACCOUNT_NAMES
+  MODEL_APIM_USER_STATES
+  MODEL_APIM_USER_NOTES
+)
+for assoc in "${REQUIRED_ASSOC_ARRAYS[@]}"; do
+  if ! declare -p "$assoc" >/dev/null 2>&1; then
+    echo "Associative array ${assoc} is not defined. Update scripts/step1-params.sh and source it again." >&2
+    exit 1
+  fi
+done
 
 get_optional_value() {
   local array_name="$1"
@@ -92,6 +107,65 @@ split_subscription_list() {
   fi
 }
 
+put_apim_user_via_rest() {
+  local user_id="$1"
+  local email="$2"
+  local account="$3"
+  local user_state="$4"
+  local user_note="$5"
+
+  local user_uri="https://management.azure.com/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}/providers/Microsoft.ApiManagement/service/${APIM_NAME}/users/${user_id}?api-version=${APIM_USER_API_VERSION}"
+
+  local user_payload_file
+  user_payload_file="$(mktemp)"
+
+  {
+    printf '{'
+    printf '"properties":{'
+    printf '"firstName":"%s",' "$(printf '%s' "$account" | sed 's/"/\\"/g')"
+    printf '"lastName":"%s",' "$(printf '%s' "$account" | sed 's/"/\\"/g')"
+    printf '"email":"%s",' "$(printf '%s' "$email" | sed 's/"/\\"/g')"
+    printf '"state":"%s"' "$(printf '%s' "$user_state" | sed 's/"/\\"/g')"
+    if [[ -n "$user_note" ]]; then
+      printf ',"note":"%s"' "$(printf '%s' "$user_note" | sed 's/"/\\"/g')"
+    fi
+    printf '}'
+    printf '}'
+  } >"$user_payload_file"
+
+  if ! az rest \
+    --method put \
+    --uri "$user_uri" \
+    --body @"$user_payload_file" \
+    --headers "Content-Type=application/json" >/dev/null; then
+    rm -f "$user_payload_file"
+    echo "Failed to ensure APIM user ${user_id} via az rest." >&2
+    exit 1
+  fi
+  rm -f "$user_payload_file"
+  printf '  Ensured APIM user %s via az rest.\n' "$user_id"
+}
+
+ensure_apim_user() {
+  local user_id="$1"
+  local email="${MODEL_APIM_USER_EMAILS[$user_id]:-}"
+  local account="${MODEL_APIM_USER_ACCOUNT_NAMES[$user_id]:-}"
+
+  if [[ -z "$email" || -z "$account" ]]; then
+    echo "Incomplete APIM user data for ${user_id}. Verify MODEL_APIM_USER_* entries in scripts/step1-params.sh." >&2
+    exit 1
+  fi
+
+  local user_state
+  if ! user_state=$(get_optional_value MODEL_APIM_USER_STATES "$user_id"); then
+    user_state="active"
+  fi
+  local user_note="${MODEL_APIM_USER_NOTES[$user_id]:-}"
+
+  printf 'Ensuring APIM user %s via az rest...\n' "$user_id"
+  put_apim_user_via_rest "$user_id" "$email" "$account" "$user_state" "$user_note"
+}
+
 for group in "${MODEL_GROUPS[@]}"; do
   subs="${MODEL_SUBSCRIPTIONS[$group]:-}"
   if [[ -z "$subs" ]]; then
@@ -119,6 +193,12 @@ for group in "${MODEL_GROUPS[@]}"; do
       continue
     fi
 
+    owner_id="${MODEL_SUBSCRIPTION_USER_IDS[$display_name]:-}"
+    if [[ -z "$owner_id" ]]; then
+      echo "No APIM user configured for subscription ${display_name}. Set MODEL_SUBSCRIPTION_USER_IDS[${display_name}] in scripts/step1-params.sh." >&2
+      exit 1
+    fi
+
     if ! subscription_id=$(get_optional_value MODEL_SUBSCRIPTION_IDS "$display_name"); then
       subscription_id="$display_name"
     fi
@@ -129,6 +209,8 @@ for group in "${MODEL_GROUPS[@]}"; do
     scope="/products/${product_id}"
 
     subscription_uri="https://management.azure.com/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}/providers/Microsoft.ApiManagement/service/${APIM_NAME}/subscriptions/${subscription_id}?api-version=${APIM_SUBSCRIPTION_API_VERSION}"
+
+    ensure_apim_user "$owner_id"
 
     set +e
     az rest --method get --uri "$subscription_uri" >/dev/null 2>&1
@@ -147,6 +229,7 @@ for group in "${MODEL_GROUPS[@]}"; do
       printf '{'
       printf '"properties":{'
       printf '"displayName":"%s",' "$(printf '%s' "$display_name" | sed 's/"/\\"/g')"
+      printf '"ownerId":"/users/%s",' "$(printf '%s' "$owner_id" | sed 's/"/\\"/g')"
       printf '"scope":"%s",' "$(printf '%s' "$scope" | sed 's/"/\\"/g')"
       printf '"state":"%s"' "$(printf '%s' "$state" | sed 's/"/\\"/g')"
       if [[ -n "$primary" ]]; then
@@ -173,6 +256,7 @@ for group in "${MODEL_GROUPS[@]}"; do
 
     printf '  Display Name: %s\n' "$display_name"
     printf '  Subscription ID: %s\n' "$subscription_id"
+    printf '  Owner User ID: %s\n' "$owner_id"
     printf '  Scope: %s\n' "$scope"
     printf '  Primary Key: %s\n' "$primary_key"
     printf '  Secondary Key: %s\n' "$secondary_key"

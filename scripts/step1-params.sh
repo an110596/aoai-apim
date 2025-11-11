@@ -65,6 +65,29 @@ declare -Ag MODEL_SUBSCRIPTION_STATES=(
 declare -Ag MODEL_SUBSCRIPTION_PRIMARY_KEYS=()
 declare -Ag MODEL_SUBSCRIPTION_SECONDARY_KEYS=()
 
+# Map each subscription display name to the APIM user ID that should own it.
+declare -Ag MODEL_SUBSCRIPTION_USER_IDS=(
+  ["sub-team-a-alice"]="user-team-a-alice"
+  ["sub-team-a-bob"]="user-team-a-bob"
+  ["sub-team-b-carol"]="user-team-b-carol"
+)
+
+# Per-APIM-user metadata keyed by user ID. Update these values for your environment.
+declare -Ag MODEL_APIM_USER_EMAILS=(
+  ["user-team-a-alice"]="alice@example.com"
+  ["user-team-a-bob"]="bob@example.com"
+  ["user-team-b-carol"]="carol@example.com"
+)
+declare -Ag MODEL_APIM_USER_ACCOUNT_NAMES=(
+  ["user-team-a-alice"]="team-a-alice"
+  ["user-team-a-bob"]="team-a-bob"
+  ["user-team-b-carol"]="team-b-carol"
+)
+declare -Ag MODEL_APIM_USER_STATES=(
+  # ["user-team-a-alice"]="active"
+)
+declare -Ag MODEL_APIM_USER_NOTES=()
+
 # Optional policy fragments to append inside each section.
 declare -Ag MODEL_POLICY_EXTRA_INBOUND=(
   # ["team-a"]="<set-header name=\"Authorization\" exists-action=\"override\"><value>@(context.Request.Headers.GetValueOrDefault(\"Authorization\", \"\"))</value></set-header>"
@@ -74,6 +97,32 @@ declare -Ag MODEL_POLICY_EXTRA_OUTBOUND=()
 declare -Ag MODEL_POLICY_EXTRA_ON_ERROR=()
 
 # ---- Validation to avoid silent misconfiguration ----
+split_subscription_list() {
+  local raw="$1"
+  local -n ref="$2"
+  ref=()
+
+  if [[ -z "$raw" ]]; then
+    return 0
+  fi
+
+  if [[ "$raw" == *$'\n'* ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      line="${line%$'\r'}"
+      if [[ -n "${line//[[:space:]]/}" ]]; then
+        ref+=("$line")
+      fi
+    done <<< "$raw"
+  else
+    read -r -a tokens <<< "$raw"
+    for token in "${tokens[@]}"; do
+      if [[ -n "$token" ]]; then
+        ref+=("$token")
+      fi
+    done
+  fi
+}
+
 for group in "${MODEL_GROUPS[@]}"; do
   if [[ -z "${MODEL_SERVICE_URLS[$group]:-}" ]]; then
     echo "MODEL_SERVICE_URLS[${group}] is empty. Fill in the Azure OpenAI endpoint." >&2
@@ -109,6 +158,47 @@ for group in "${MODEL_GROUPS[@]}"; do
     fi
   done
 
+  subs="${MODEL_SUBSCRIPTIONS[$group]:-}"
+  if [[ -z "$subs" ]]; then
+    continue
+  fi
+  subscription_names=()
+  split_subscription_list "$subs" subscription_names
+  if [[ ${#subscription_names[@]} -eq 0 ]]; then
+    echo "MODEL_SUBSCRIPTIONS[${group}] has no entries after parsing." >&2
+    return 1
+  fi
+  for display_name in "${subscription_names[@]}"; do
+    owner_id="${MODEL_SUBSCRIPTION_USER_IDS[$display_name]:-}"
+    if [[ -z "$owner_id" ]]; then
+      echo "MODEL_SUBSCRIPTION_USER_IDS[${display_name}] is empty. Map each subscription to an APIM user ID." >&2
+      return 1
+    fi
+    if [[ "$owner_id" == *"<"*">"* ]]; then
+      echo "MODEL_SUBSCRIPTION_USER_IDS[${display_name}] still contains placeholder brackets. Update it." >&2
+      return 1
+    fi
+
+    email="${MODEL_APIM_USER_EMAILS[$owner_id]:-}"
+    account_name="${MODEL_APIM_USER_ACCOUNT_NAMES[$owner_id]:-}"
+
+    if [[ -z "$email" ]]; then
+      echo "MODEL_APIM_USER_EMAILS[${owner_id}] is empty. Provide the APIM user email address." >&2
+      return 1
+    fi
+    if [[ "$email" == *"<"*">"* ]]; then
+      echo "MODEL_APIM_USER_EMAILS[${owner_id}] still contains placeholder brackets. Update it." >&2
+      return 1
+    fi
+    if [[ -z "$account_name" ]]; then
+      echo "MODEL_APIM_USER_ACCOUNT_NAMES[${owner_id}] is empty. Provide the APIM user account name." >&2
+      return 1
+    fi
+    if [[ "$account_name" == *"<"*">"* ]]; then
+      echo "MODEL_APIM_USER_ACCOUNT_NAMES[${owner_id}] still contains placeholder brackets. Update it." >&2
+      return 1
+    fi
+  done
 done
 
 echo "Loaded Step 1 parameters for groups: ${MODEL_GROUPS[*]}"
