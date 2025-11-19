@@ -17,6 +17,8 @@ export LOCATION="japaneast"
 export APIM_NAME="apim-aoai-team"
 export PUBLISHER_NAME="ExampleCorp"
 export PUBLISHER_EMAIL="aoai-admin@example.com"
+# Hosted OpenAPI specification that APIM will import in Step 4 (HTTP(S) URL, SAS token allowed).
+export OPENAPI_SPEC_URL="${OPENAPI_SPEC_URL:-https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/cognitiveservices/data-plane/AzureOpenAI/inference/stable/2024-10-21/inference.json}"
 
 # Optional: expose the raw OpenAI API key when you need direct testing.
 # export OPENAI_API_KEY=""
@@ -98,6 +100,15 @@ declare -Ag MODEL_POLICY_EXTRA_ON_ERROR=()
 # ---- Validation to avoid silent misconfiguration ----
 if [[ ${#MODEL_GROUPS[@]} -eq 0 ]]; then
   echo "MODEL_GROUPS is empty. Configure at least one Azure OpenAI deployment group." >&2
+  return 1
+fi
+
+if [[ -z "${OPENAPI_SPEC_URL:-}" ]]; then
+  echo "OPENAPI_SPEC_URL is empty. Host the OpenAPI document and set the URL." >&2
+  return 1
+fi
+if [[ "${OPENAPI_SPEC_URL}" == *"<"*">"* ]]; then
+  echo "OPENAPI_SPEC_URL still contains placeholder brackets. Update it." >&2
   return 1
 fi
 

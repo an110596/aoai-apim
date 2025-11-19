@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Creates or updates client-facing APIs per endpoint and wires them to backend groups.
+# Creates or updates client-facing APIs per endpoint by importing a shared OpenAPI surface.
 
 set -euo pipefail
 
@@ -22,6 +22,14 @@ if ! command -v az >/dev/null 2>&1; then
   echo "Azure CLI (az) is required but not found in PATH." >&2
   exit 1
 fi
+
+SPEC_URL="${OPENAPI_SPEC_URL:-}"
+if [[ -z "$SPEC_URL" ]]; then
+  echo "OPENAPI_SPEC_URL is not set. Provide an HTTP(S) (or other accessible) URL to the OpenAPI specification." >&2
+  exit 1
+fi
+
+printf 'Using OpenAPI specification: %s\n' "$SPEC_URL"
 
 REQUIRED_VARS=(RG_NAME APIM_NAME MODEL_GROUPS CLIENT_ENDPOINTS)
 for var in "${REQUIRED_VARS[@]}"; do
@@ -91,28 +99,22 @@ for endpoint in "${CLIENT_ENDPOINTS[@]}"; do
   printf 'Processing API for endpoint %s (group %s, API ID: %s)\n' "$endpoint" "$group" "$api_id"
 
   if az apim api show --resource-group "$RG_NAME" --service-name "$APIM_NAME" --api-id "$api_id" >/dev/null 2>&1; then
-    printf 'Updating API %s...\n' "$api_id"
-    az apim api update \
-      --resource-group "$RG_NAME" \
-      --service-name "$APIM_NAME" \
-      --api-id "$api_id" \
-      --display-name "$display_name" \
-      --path "$api_path" \
-      --service-url "$service_url" \
-      --protocols https \
-      --subscription-required false
+    printf 'Importing operations into existing API %s...\n' "$api_id"
   else
-    printf 'Creating API %s...\n' "$api_id"
-    az apim api create \
-      --resource-group "$RG_NAME" \
-      --service-name "$APIM_NAME" \
-      --api-id "$api_id" \
-      --display-name "$display_name" \
-      --path "$api_path" \
-      --protocols https \
-      --service-url "$service_url" \
-      --subscription-required false
+    printf 'Creating API %s via import...\n' "$api_id"
   fi
+
+  az apim api import \
+    --resource-group "$RG_NAME" \
+    --service-name "$APIM_NAME" \
+    --api-id "$api_id" \
+    --display-name "$display_name" \
+    --path "$api_path" \
+    --protocols https \
+    --service-url "$service_url" \
+    --subscription-required false \
+    --specification-format OpenApi \
+    --specification-url "$SPEC_URL"
 
 done
 

@@ -43,6 +43,7 @@ flowchart LR
 ### 1. パラメータの宣言
 - リポジトリ直下の `scripts/step1-params.sh` に、リソース名やモデル別設定など本手順で利用する環境変数をまとめている。`RG_NAME` や `MODEL_GROUPS`、`MODEL_SERVICE_URLS`、`MODEL_ALLOWED_IPS` に加えて、クライアントごとの `CLIENT_ENDPOINTS` / `CLIENT_ENDPOINT_GROUPS` / `CLIENT_ENDPOINT_PATHS` を定義し、どのAzure OpenAIデプロイへルーティングするかを記述する。
 - APIバージョンは `OPENAI_API_VERSION`（グループごとに変えたい場合は `MODEL_API_VERSIONS`）で管理する。最新のプレビュー版を使う場合などはここを更新し、後続スクリプトの引数に自動反映させる。
+- Step 4 のインポートで使用する OpenAPI 仕様は `OPENAPI_SPEC_URL` に記述する。デフォルトでは Microsoft 公式の `2024-10-21` 安定版 `inference.json`（GitHub Raw）を参照するため、一般的なチャット／Embeddings エンドポイントはそのまま利用可能。別バージョンを使いたい場合は `export OPENAPI_SPEC_URL=...` をStep 1を `source` する前に設定するか、このファイル内の値を書き換える。
 - Azure OpenAIのAPIキーは `MODEL_API_KEYS` に、クライアント用のAPIMキーは `CLIENT_ENDPOINT_KEYS` に定義する。サンプルでは `$(<"${HOME}/secrets/...")` 形式でローカルファイルから読み込むようにしているので、実際のパスに合わせて更新する。**平文をリポジトリに記述しないこと。**
 - Azure CLI を使うシェルを開いたら、Step 2 に進む前に `source scripts/step1-params.sh` を実行して環境変数を読み込む（実行ではなく *source* する）。スクリプトにはプレースホルダーや未設定値が残っていると失敗するバリデーションを入れているため、エラーが出る場合は設定を見直す。
 - 新しいシェルを開いた場合や値を変更した場合も同じように `source scripts/step1-params.sh` を実行してから先のステップを進める。
@@ -63,6 +64,7 @@ flowchart LR
 - `scripts/step4-configure-apis.sh` を実行すると、`CLIENT_ENDPOINTS` に定義した各キー専用のAPIM APIを作成（既存の場合は更新）する。APIパスはデフォルトで `openai/<endpoint>`、API ID は `aoai-<endpoint>` になる。
 - サンプルのままでよければ設定不要だが、個別に変えたい場合は `CLIENT_ENDPOINT_PATHS`（パス）、`CLIENT_ENDPOINT_API_IDS`（API ID）、`CLIENT_ENDPOINT_API_DISPLAY_NAMES`（表示名）を連想配列で上書きできる。
 - すべてのAPIで `subscription-required=false` を設定し、APIM組み込みのサブスクリプションキーではなく後述の `<check-header>` ポリシーで認証する運用に切り替えている。
+- Step 4 では `az apim api import` を `--specification-url` 付きで呼び出し、`chat/completions` や `embeddings` など主要なエンドポイントを自動でオペレーションとして登録する。デフォルトでは GitHub Raw 上の `inference.json` (2024-10-21 stable) を使用するが、他のURLへ差し替えたい場合は Step 1 で `OPENAPI_SPEC_URL` を更新してから実行する。
 - 実行例: `bash scripts/step4-configure-apis.sh`
 
 ### 5. ポリシーの適用（リクエスト透過化 + IP制限）
