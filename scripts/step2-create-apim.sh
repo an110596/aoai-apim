@@ -48,5 +48,4 @@ az apim create \
   --location "$LOCATION" \
   --publisher-name "$PUBLISHER_NAME" \
   --publisher-email "$PUBLISHER_EMAIL" \
-  --sku-name Consumption \
-  --enable-managed-identity
+  --sku-name Consumption

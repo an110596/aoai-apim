@@ -7,6 +7,13 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   exit 1
 fi
 
+# Preserve caller shell option state so sourcing this script is non-destructive.
+__AOAI_APIM_PREV_SHELL_OPTIONS="$(set +o)"
+restore_aoai_apim_shell_options() {
+  eval "${__AOAI_APIM_PREV_SHELL_OPTIONS}"
+}
+trap 'restore_aoai_apim_shell_options' RETURN
+
 set -o errexit
 set -o nounset
 set -o pipefail

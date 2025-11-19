@@ -162,7 +162,7 @@ for endpoint in "${CLIENT_ENDPOINTS[@]}"; do
   az rest \
     --method put \
     --uri "$policy_uri" \
-    --headers "Content-Type=application/vnd.ms-azure-apim.policy+xml;If-Match=*" \
+    --headers "Content-Type=application/vnd.ms-azure-apim.policy+xml" "If-Match=*" \
     --body @"$policy_file" >/dev/null
 
   rm -f "$policy_file"

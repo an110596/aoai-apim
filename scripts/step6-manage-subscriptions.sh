@@ -80,7 +80,7 @@ printf '%.0s-' {1..90}
 printf '\n'
 
 for endpoint in "${CLIENT_ENDPOINTS[@]}"; do
-  group="${CLIENT_ENDPOINT_GROUPS[$endpoint]}"
+  group="${CLIENT_ENDPOINT_GROUPS[$endpoint]:-}"
   if [[ -z "$group" ]]; then
     echo "CLIENT_ENDPOINT_GROUPS[$endpoint] is empty. Update scripts/step1-params.sh." >&2
     exit 1
