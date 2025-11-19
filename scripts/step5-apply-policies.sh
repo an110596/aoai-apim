@@ -100,6 +100,12 @@ for endpoint in "${CLIENT_ENDPOINTS[@]}"; do
     echo "MODEL_ALLOWED_IPS[$group] has no entries after parsing." >&2
     exit 1
   fi
+  for entry in "${allowed_entries[@]}"; do
+    if [[ "$entry" == */* ]]; then
+      echo "MODEL_ALLOWED_IPS[$group] entry '$entry' must be a literal IP address; CIDR blocks are not supported. Update scripts/step1-params.sh." >&2
+      exit 1
+    fi
+  done
 
   client_nv="client-api-key-${endpoint}"
   backend_service_nv="openai-service-url-${group}"
@@ -156,7 +162,7 @@ for endpoint in "${CLIENT_ENDPOINTS[@]}"; do
   az rest \
     --method put \
     --uri "$policy_uri" \
-    --headers "Content-Type=application/vnd.ms-azure-apim.policy+xml" \
+    --headers "Content-Type=application/vnd.ms-azure-apim.policy+xml;If-Match=*" \
     --body @"$policy_file" >/dev/null
 
   rm -f "$policy_file"

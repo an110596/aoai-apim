@@ -46,10 +46,10 @@ declare -Ag MODEL_API_KEYS=(
   ["aoai-endpoint-3"]="$(<\"${HOME}/secrets/aoai-endpoint-3.key\")"
 )
 
-# Space-separated IP addresses or CIDR blocks allowed to call the APIM endpoint per group.
+# Space-separated IPv4/IPv6 addresses (no CIDR ranges) allowed to call the APIM endpoint per group.
 declare -Ag MODEL_ALLOWED_IPS=(
-  ["aoai-endpoint-1"]="<endpoint-1-allow-ip-1> <endpoint-1-allow-cidr-2>"
-  ["aoai-endpoint-2"]="<endpoint-2-allow-ip-1>"
+  ["aoai-endpoint-1"]="<endpoint-1-allow-ip-1> <endpoint-1-allow-ip-2>"
+  ["aoai-endpoint-2"]="<endpoint-2-allow-ip-1> <endpoint-2-allow-ip-2>"
   ["aoai-endpoint-3"]="<endpoint-3-allow-ip-1>"
 )
 
@@ -132,7 +132,7 @@ for group in "${MODEL_GROUPS[@]}"; do
 
   allowed_ips="${MODEL_ALLOWED_IPS[$group]:-}"
   if [[ -z "$allowed_ips" ]]; then
-    echo "MODEL_ALLOWED_IPS[${group}] is empty. Define the allowed IPs/CIDRs." >&2
+    echo "MODEL_ALLOWED_IPS[${group}] is empty. Define at least one allowed IP address." >&2
     return 1
   fi
   read -r -a allowed_tokens <<< "$allowed_ips"
@@ -143,6 +143,10 @@ for group in "${MODEL_GROUPS[@]}"; do
   for ip in "${allowed_tokens[@]}"; do
     if [[ "$ip" == *"<"*">"* ]]; then
       echo "MODEL_ALLOWED_IPS[${group}] still contains placeholder brackets. Update it." >&2
+      return 1
+    fi
+    if [[ "$ip" == */* ]]; then
+      echo "MODEL_ALLOWED_IPS[${group}] entry '$ip' must be a literal IP address (CIDR ranges not supported)." >&2
       return 1
     fi
   done
