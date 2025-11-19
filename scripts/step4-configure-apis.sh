@@ -89,7 +89,8 @@ for group in "${MODEL_GROUPS[@]}"; do
       --path "$api_path" \
       --service-url "$service_url" \
       --protocols https \
-      --subscription-key-header-name "api-key"
+      --subscription-key-header-name "api-key" \
+      --subscription-key-query-param-name "api-key"
   else
     printf 'Creating API %s...\n' "$api_id"
     az apim api create \
@@ -100,7 +101,8 @@ for group in "${MODEL_GROUPS[@]}"; do
       --path "$api_path" \
       --protocols https \
       --service-url "$service_url" \
-      --subscription-key-header-name "api-key"
+      --subscription-key-header-name "api-key" \
+      --subscription-key-query-param-name "api-key"
   fi
 
   if az apim product show --resource-group "$RG_NAME" --service-name "$APIM_NAME" --product-id "$product_id" >/dev/null 2>&1; then
