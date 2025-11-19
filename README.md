@@ -10,13 +10,13 @@ Azure API Manager経由でAzure OpenAI APIを使用するAzureの設定を行う
 
    | User | Key | APIM endpoint | AOAI endpoint |
    | --- | --- | --- | --- |
-   | A | Key A | Same endpoint | endpoint 1 |
-   | B | Key B | Same endpoint | endpoint 1 |
-   | C | Key C | Same endpoint | endpoint 1 |
-   | D | Key D | Same endpoint | endpoint 2 |
-   | E | Key E | Same endpoint | endpoint 2 |
-   | F | Key F | Same endpoint | endpoint 3 |
-   | G | Key G | Same endpoint | endpoint 3 |
+   | A | Key A | endpoint A | endpoint 1 |
+   | B | Key B | endpoint B | endpoint 1 |
+   | C | Key C | endpoint C | endpoint 1 |
+   | D | Key D | endpoint D | endpoint 2 |
+   | E | Key E | endpoint E | endpoint 2 |
+   | F | Key F | endpoint F | endpoint 3 |
+   | G | Key G | endpoint G | endpoint 3 |
 
 4. 特定のIPアドレスのみAPIMにアクセスできるようにip-filterを設定したい。
 5. APIMのプランはconsumption planを使用する。そのため開発者ポータルやVNETを使えない。
@@ -25,11 +25,10 @@ Azure API Manager経由でAzure OpenAI APIを使用するAzureの設定を行う
 #### フロー図
 ```mermaid
 flowchart LR
-  Client["Client<br>APIMサブスクリプションキー (例: sub-team-a-alice)"] -- HTTPSリクエスト --> APIM["APIM API<br>/openai/team-a"]
-  APIM -- Product紐付け --> Product["Product team-a"]
-  APIM -- ポリシー解決 --> NV["Named Value<br>openai-api-key-team-a"]
-  APIM -- set-backend-service --> AOAI["Azure OpenAI Deployment<br>gpt-4o (team-a)"]
-  NV -- set-header api-key --> AOAI
+  Client["Client<br>Key A"] -- HTTPS (api-key: Key A) --> APIM["APIM API<br>/openai/key-a"]
+  APIM -- check-header --> NV_CLIENT["Named Value<br>client-api-key-key-a"]
+  APIM -- set-backend-service --> AOAI["Azure OpenAI Deployment<br>gpt-4o (endpoint-1)"]
+  APIM -- set-header api-key --> NV["Named Value<br>openai-api-key-endpoint-1"]
   AOAI -- 応答 --> APIM -- 応答転送 --> Client
 ```
 
@@ -42,9 +41,9 @@ flowchart LR
 - 既存の Azure OpenAI リソースで使用するデプロイ名とエンドポイントURL、APIキーを控えておく。
 
 ### 1. パラメータの宣言
-- リポジトリ直下の `scripts/step1-params.sh` に、リソース名やモデル別設定など本手順で利用する環境変数をまとめている。`RG_NAME` や `MODEL_GROUPS`、`MODEL_SERVICE_URLS`、`MODEL_API_KEYS`、`MODEL_ALLOWED_IPS`、`MODEL_SUBSCRIPTIONS` などを自分の環境に合わせて編集し、プレースホルダー（`<your-openai-...>` や `<team-a-allow-ip-1>` など）が残らないよう更新する。
+- リポジトリ直下の `scripts/step1-params.sh` に、リソース名やモデル別設定など本手順で利用する環境変数をまとめている。`RG_NAME` や `MODEL_GROUPS`、`MODEL_SERVICE_URLS`、`MODEL_ALLOWED_IPS` に加えて、クライアントごとの `CLIENT_ENDPOINTS` / `CLIENT_ENDPOINT_GROUPS` / `CLIENT_ENDPOINT_PATHS` を定義し、どのAzure OpenAIデプロイへルーティングするかを記述する。
 - APIバージョンは `OPENAI_API_VERSION`（グループごとに変えたい場合は `MODEL_API_VERSIONS`）で管理する。最新のプレビュー版を使う場合などはここを更新し、後続スクリプトの引数に自動反映させる。
-- APIキーは `MODEL_API_KEYS` に安全な方法で読み込む。サンプルでは `$(<"${HOME}/secrets/..." )` で外部ファイルから取り込む例をコメントアウトで示しているので、運用に合わせて有効化する。
+- Azure OpenAIのAPIキーは `MODEL_API_KEYS` に、クライアント用のAPIMキーは `CLIENT_ENDPOINT_KEYS` に定義する。サンプルでは `$(<"${HOME}/secrets/...")` 形式でローカルファイルから読み込むようにしているので、実際のパスに合わせて更新する。**平文をリポジトリに記述しないこと。**
 - Azure CLI を使うシェルを開いたら、Step 2 に進む前に `source scripts/step1-params.sh` を実行して環境変数を読み込む（実行ではなく *source* する）。スクリプトにはプレースホルダーや未設定値が残っていると失敗するバリデーションを入れているため、エラーが出る場合は設定を見直す。
 - 新しいシェルを開いた場合や値を変更した場合も同じように `source scripts/step1-params.sh` を実行してから先のステップを進める。
 
@@ -55,47 +54,43 @@ flowchart LR
 
 ### 3. Named Value の登録
 - `scripts/step3-create-named-values.sh` を実行すると、Step 1 で宣言した `MODEL_GROUPS` を走査し、各グループの `openai-service-url-<group>`（非シークレット）と `openai-api-key-<group>`（シークレット）をAPIMのNamed Valueとして作成または更新する。
-- スクリプトは `scripts/step1-params.sh` を再度 `source` し、未設定やプレースホルダーが残っているとエラーで停止する。APIキーも同様に `MODEL_API_KEYS` に読み込んでおく。
+- 同じスクリプトで `CLIENT_ENDPOINTS` も走査し、クライアント認証に使う `client-api-key-<endpoint>` Named Value を作成する（ポリシーの `<check-header>` で照合するため、Step 5 の前に必須）。
+- スクリプトは `scripts/step1-params.sh` を再度 `source` し、未設定やプレースホルダーが残っているとエラーで停止する。APIキーも同様に `MODEL_API_KEYS` / `CLIENT_ENDPOINT_KEYS` に読み込んでおく。
 - 既存のNamed Valueが存在する場合は `az apim nv update` を用いて値を更新するため、再実行時も安全。
 - 実行例: `bash scripts/step3-create-named-values.sh`
 
-### 4. モデルごとのAPI定義
-- `scripts/step4-configure-apis.sh` を実行すると、各モデルグループ向けのAPIM APIとProductを作成（既存の場合は更新）し、両者を関連付ける。デフォルトでは API ID を `aoai-<group>`、Product ID を `product-<group>`、パスを `openai/<group>` に設定する。
-- これらのIDや表示名、パスを変えたい場合は `scripts/step1-params.sh` で以下の連想配列を必要に応じて定義し、グループ名をキーに値を設定しておく。
-  - `declare -Ag MODEL_API_IDS`（API ID）
-  - `declare -Ag MODEL_PRODUCT_IDS`（Product ID）
-  - `declare -Ag MODEL_API_PATHS`（APIパス）
-  - `declare -Ag MODEL_API_DISPLAY_NAMES` / `MODEL_PRODUCT_DISPLAY_NAMES`（表示名）
-- スクリプトは `scripts/step1-params.sh` を再度 `source` し、`MODEL_SERVICE_URLS` の未設定やプレースホルダーが残っている場合はエラーで停止する。Named Value（Step 3）で作成した `openai-service-url-*` / `openai-api-key-*` をそのまま参照できる想定で、クライアントからは従来どおり `api-key` ヘッダを利用できる。
+### 4. クライアントごとのAPI定義
+- `scripts/step4-configure-apis.sh` を実行すると、`CLIENT_ENDPOINTS` に定義した各キー専用のAPIM APIを作成（既存の場合は更新）する。APIパスはデフォルトで `openai/<endpoint>`、API ID は `aoai-<endpoint>` になる。
+- サンプルのままでよければ設定不要だが、個別に変えたい場合は `CLIENT_ENDPOINT_PATHS`（パス）、`CLIENT_ENDPOINT_API_IDS`（API ID）、`CLIENT_ENDPOINT_API_DISPLAY_NAMES`（表示名）を連想配列で上書きできる。
+- すべてのAPIで `subscription-required=false` を設定し、APIM組み込みのサブスクリプションキーではなく後述の `<check-header>` ポリシーで認証する運用に切り替えている。
 - 実行例: `bash scripts/step4-configure-apis.sh`
 
 ### 5. ポリシーの適用（リクエスト透過化 + IP制限）
-- `scripts/step5-apply-policies.sh` を実行すると、各グループのAPIに対して `<ip-filter>` による許可リスト、`set-backend-service`、`set-header api-key` を含むポリシーを生成し適用する。`MODEL_GROUPS` の内容を走査し、Named Value（Step 3）とAPI（Step 4）が揃っている前提で動作する。
-- アクセスを許可するIPアドレス/CIDRは `scripts/step1-params.sh` の `MODEL_ALLOWED_IPS` にスペース区切りで設定する。サンプルのプレースホルダー（`<team-a-allow-ip-1>` など）は必ず実際の値に置き換える。
-- 追加で透過させたいヘッダや加工がある場合は、同じく Step 1 で `MODEL_POLICY_EXTRA_INBOUND` / `MODEL_POLICY_EXTRA_BACKEND` / `MODEL_POLICY_EXTRA_OUTBOUND` / `MODEL_POLICY_EXTRA_ON_ERROR` にXML断片を指定すると、そのまま該当セクションへ差し込まれる。
-- API ID やパスをカスタマイズしている場合でも、Step 4 と同じく `MODEL_API_IDS` などの連想配列を設定しておけば本スクリプトからも参照できる。
+- `scripts/step5-apply-policies.sh` はクライアントエンドポイントごとに `<ip-filter>`・`<check-header>`・`set-backend-service` を含むポリシーを生成する。APIは Step 4 で作成済みであることが前提。
+- `MODEL_ALLOWED_IPS` はバックエンドグループ単位で管理し、同じグループに紐づくエンドポイントは共通のIP許可リストを共有する。
+- クライアントの `api-key` ヘッダは `client-api-key-<endpoint>` Named Value と照合され、一致しない場合は 401 を返す。バックエンドに転送する際は `openai-api-key-<group>` を `set-header` で上書きする。
+- 追加加工が必要な場合は `MODEL_POLICY_EXTRA_*` にXML断片を記述すると該当セクションへ挿入できる。
 - 実行例: `bash scripts/step5-apply-policies.sh`
 
-### 6. 利用者管理とサブスクリプションキーの発行
-- `scripts/step6-manage-subscriptions.sh` を実行すると、Step 1 の `MODEL_SUBSCRIPTIONS` に列挙した表示名ごとにAPIMサブスクリプションを作成または更新し、`primaryKey` / `secondaryKey` を出力する。グループごとにProductへひも付けた状態で発行する。
-- サブスクリプションIDを明示したい場合は `MODEL_SUBSCRIPTION_IDS` に `display-name -> id` を設定する（未指定時は表示名をそのままIDとして利用）。ステータスやキーを固定したい場合は `MODEL_SUBSCRIPTION_STATES`、`MODEL_SUBSCRIPTION_PRIMARY_KEYS`、`MODEL_SUBSCRIPTION_SECONDARY_KEYS` に値を登録しておく。
-- Product ID をカスタマイズしている場合でも、Step 4 同様に `MODEL_PRODUCT_IDS` を設定していれば本スクリプトが参照する。該当グループにサブスクリプションを作りたくない場合は `MODEL_SUBSCRIPTIONS["group"]` を空にする。
-- 実行例: `bash scripts/step6-manage-subscriptions.sh`。出力されたキーは安全な保管場所に移し、ユーザーへは安全な経路で配布する。
+### 6. クライアントキーの同期（Named Value化）
+- Step 3 で初期登録した `client-api-key-*` をローテーションしたいときは `scripts/step6-manage-subscriptions.sh` を実行する。最新の `CLIENT_ENDPOINT_KEYS` を再読み込みし、Named Value を再作成したうえで対応表を出力する。
+- スクリプト実行後に、エンドポイント名・APIMパス・バックエンドの対応関係を表にまとめて出力する。利用者への共有には `~/secrets/...` の元ファイルや安全なシークレットマネージャーを使う。
+- 実行例: `bash scripts/step6-manage-subscriptions.sh`
 
 ### 7. 動作確認と監視
-- `scripts/step7-validate.sh` を利用して、同一ペイロードをAPIMと（必要に応じて）直接のAzure OpenAIに送り、レスポンスやHTTPステータス、エラー内容を比較できる。例:
+- `scripts/step7-validate.sh` を利用して、同一ペイロードをクライアント用APIMエンドポイントと（必要に応じて）直接のAzure OpenAIに送り、レスポンスやHTTPステータス、エラー内容を比較できる。例:
   ```bash
   bash scripts/step7-validate.sh \
-    --group team-a \
+    --endpoint key-a \
     --file payloads/chat.json \
-    --subscription-key "$(pass show apim/team-a-primary)" \
+    --client-key "$(pass show apim/key-a)" \
     --stream
   ```
-  `--stream` を付けると `curl --no-buffer` を使ってチャンクが逐次出力される。APIMキーは `--subscription-key` または `APIM_SUBSCRIPTION_KEY` で渡す（Step 1 の `MODEL_SUBSCRIPTION_PRIMARY_KEYS` に登録しておけば自動参照される）。直接のAzure OpenAI呼び出しをスキップしたい場合は `--skip-direct` を指定する。
-- `--endpoint` で `chat/completions` 以外のエンドポイントを指定でき、`--api-version` でプレビューバージョンなどを切り替えられる。デフォルトでは `OPENAI_API_VERSION`（グループごとに指定している場合は `MODEL_API_VERSIONS`）を使用する。
+- `--stream` を付けると `curl --no-buffer` を使ってチャンクが逐次出力される。クライアントキーは `--client-key` または `CLIENT_ENDPOINT_KEYS[key]` で渡せる。直接のAzure OpenAI呼び出しをスキップしたい場合は `--skip-direct` を指定する。
+- `--path` で `chat/completions` 以外のAPIを指定でき、`--api-version` でプレビューバージョンなどを切り替えられる。デフォルトでは `OPENAI_API_VERSION`（グループごとに指定している場合は `MODEL_API_VERSIONS`）を使用する。
 - タイミング比較など詳細な観測が必要な場合は、上記スクリプトの出力を `ts '%H:%M:%S.%3N'` などにパイプしてタイムスタンプを追加するか、生成されたURLを使って個別に `curl` を実行して計測する。
 - 運用監視は `az monitor diagnostic-settings create` を活用し、Log Analytics やダッシュボードでリクエスト数・レイテンシ・エラー率を追跡する。必要に応じてモデル／グループ単位のクエリを作成しておく。
 
 ### 8. 運用
 - IPリストやAPIキーのローテーションはRunbook化し、変更時は `az apim nv update` や `az apim api policy update` を利用する。
-- 新規モデルを追加する場合は、上記のループにエントリを追加してAPI・Productを増やし、該当ユーザーのサブスクリプションを付け替える。
+- 新規モデル（バックエンドグループ）を追加する場合は `MODEL_GROUPS` と関連するNamed Valueを増やし、紐付けたいクライアントは `CLIENT_ENDPOINTS` に追記する。これにより自動で専用API・ポリシー・キーが展開される。

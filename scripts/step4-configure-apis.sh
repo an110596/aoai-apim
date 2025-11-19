@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Creates or updates APIs and Products per model group and links them.
+# Creates or updates client-facing APIs per endpoint and wires them to backend groups.
 
 set -euo pipefail
 
@@ -23,7 +23,7 @@ if ! command -v az >/dev/null 2>&1; then
   exit 1
 fi
 
-REQUIRED_VARS=(RG_NAME APIM_NAME MODEL_GROUPS)
+REQUIRED_VARS=(RG_NAME APIM_NAME MODEL_GROUPS CLIENT_ENDPOINTS)
 for var in "${REQUIRED_VARS[@]}"; do
   if [[ -z "${!var:-}" ]]; then
     echo "Environment variable ${var} is empty. Update scripts/step1-params.sh and source it again." >&2
@@ -33,6 +33,10 @@ done
 
 if [[ ${#MODEL_GROUPS[@]} -eq 0 ]]; then
   echo "MODEL_GROUPS is empty; specify at least one group in scripts/step1-params.sh." >&2
+  exit 1
+fi
+if [[ ${#CLIENT_ENDPOINTS[@]} -eq 0 ]]; then
+  echo "CLIENT_ENDPOINTS is empty; configure at least one endpoint/key pair in scripts/step1-params.sh." >&2
   exit 1
 fi
 
@@ -50,7 +54,13 @@ get_optional_value() {
   return 1
 }
 
-for group in "${MODEL_GROUPS[@]}"; do
+for endpoint in "${CLIENT_ENDPOINTS[@]}"; do
+  group="${CLIENT_ENDPOINT_GROUPS[$endpoint]:-}"
+  if [[ -z "$group" ]]; then
+    echo "CLIENT_ENDPOINT_GROUPS[$endpoint] is empty. Map endpoints to model groups in scripts/step1-params.sh." >&2
+    exit 1
+  fi
+
   service_url="${MODEL_SERVICE_URLS[$group]:-}"
   if [[ -z "$service_url" ]]; then
     echo "MODEL_SERVICE_URLS[$group] is empty. Fix scripts/step1-params.sh." >&2
@@ -61,23 +71,24 @@ for group in "${MODEL_GROUPS[@]}"; do
     exit 1
   fi
 
-  if ! api_id=$(get_optional_value MODEL_API_IDS "$group"); then
-    api_id="aoai-${group}"
+  if ! api_id=$(get_optional_value CLIENT_ENDPOINT_API_IDS "$endpoint"); then
+    api_id="aoai-${endpoint}"
   fi
-  if ! product_id=$(get_optional_value MODEL_PRODUCT_IDS "$group"); then
-    product_id="product-${group}"
+  if ! api_path=$(get_optional_value CLIENT_ENDPOINT_PATHS "$endpoint"); then
+    api_path="openai/${endpoint}"
   fi
-  if ! api_path=$(get_optional_value MODEL_API_PATHS "$group"); then
-    api_path="openai/${group}"
-  fi
-  if ! display_name=$(get_optional_value MODEL_API_DISPLAY_NAMES "$group"); then
-    display_name="AOAI ${group}"
-  fi
-  if ! product_display_name=$(get_optional_value MODEL_PRODUCT_DISPLAY_NAMES "$group"); then
-    product_display_name="AOAI ${group}"
+  if ! display_name=$(get_optional_value CLIENT_ENDPOINT_API_DISPLAY_NAMES "$endpoint"); then
+    display_name="AOAI ${endpoint}"
   fi
 
-  printf 'Processing API/Product for group %s (API ID: %s, Product ID: %s)\n' "$group" "$api_id" "$product_id"
+  api_path="${api_path#/}"
+  api_path="${api_path%/}"
+  if [[ -z "$api_path" ]]; then
+    echo "API path resolved to empty for endpoint $endpoint." >&2
+    exit 1
+  fi
+
+  printf 'Processing API for endpoint %s (group %s, API ID: %s)\n' "$endpoint" "$group" "$api_id"
 
   if az apim api show --resource-group "$RG_NAME" --service-name "$APIM_NAME" --api-id "$api_id" >/dev/null 2>&1; then
     printf 'Updating API %s...\n' "$api_id"
@@ -89,8 +100,7 @@ for group in "${MODEL_GROUPS[@]}"; do
       --path "$api_path" \
       --service-url "$service_url" \
       --protocols https \
-      --subscription-key-header-name "api-key" \
-      --subscription-key-query-param-name "api-key"
+      --subscription-required false
   else
     printf 'Creating API %s...\n' "$api_id"
     az apim api create \
@@ -101,41 +111,9 @@ for group in "${MODEL_GROUPS[@]}"; do
       --path "$api_path" \
       --protocols https \
       --service-url "$service_url" \
-      --subscription-key-header-name "api-key" \
-      --subscription-key-query-param-name "api-key"
-  fi
-
-  if az apim product show --resource-group "$RG_NAME" --service-name "$APIM_NAME" --product-id "$product_id" >/dev/null 2>&1; then
-    printf 'Updating Product %s...\n' "$product_id"
-    az apim product update \
-      --resource-group "$RG_NAME" \
-      --service-name "$APIM_NAME" \
-      --product-id "$product_id" \
-      --product-name "$product_display_name" \
-      --approval-required false \
-      --subscriptions-limit 1
-  else
-    printf 'Creating Product %s...\n' "$product_id"
-    az apim product create \
-      --resource-group "$RG_NAME" \
-      --service-name "$APIM_NAME" \
-      --product-id "$product_id" \
-      --product-name "$product_display_name" \
-      --approval-required false \
-      --subscriptions-limit 1
-  fi
-
-  if az apim product api check --resource-group "$RG_NAME" --service-name "$APIM_NAME" --product-id "$product_id" --api-id "$api_id" >/dev/null 2>&1; then
-    printf 'API %s already linked to product %s.\n' "$api_id" "$product_id"
-  else
-    printf 'Linking API %s to product %s...\n' "$api_id" "$product_id"
-    az apim product api add \
-      --resource-group "$RG_NAME" \
-      --service-name "$APIM_NAME" \
-      --product-id "$product_id" \
-      --api-id "$api_id"
+      --subscription-required false
   fi
 
 done
 
-printf 'APIs and products processed for groups: %s\n' "${MODEL_GROUPS[*]}"
+printf 'APIs processed for endpoints: %s\n' "${CLIENT_ENDPOINTS[*]}"

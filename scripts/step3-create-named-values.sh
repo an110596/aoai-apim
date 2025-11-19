@@ -23,7 +23,7 @@ if ! command -v az >/dev/null 2>&1; then
   exit 1
 fi
 
-REQUIRED_VARS=(RG_NAME APIM_NAME MODEL_GROUPS)
+REQUIRED_VARS=(RG_NAME APIM_NAME MODEL_GROUPS CLIENT_ENDPOINTS)
 for var in "${REQUIRED_VARS[@]}"; do
   if [[ -z "${!var:-}" ]]; then
     echo "Environment variable ${var} is empty. Update scripts/step1-params.sh and source it again." >&2
@@ -66,6 +66,15 @@ create_or_update_nv() {
   fi
 }
 
+if [[ ${#MODEL_GROUPS[@]} -eq 0 ]]; then
+  echo "MODEL_GROUPS is empty; specify at least one group in scripts/step1-params.sh." >&2
+  exit 1
+fi
+if [[ ${#CLIENT_ENDPOINTS[@]} -eq 0 ]]; then
+  echo "CLIENT_ENDPOINTS is empty; configure at least one endpoint/key pair in scripts/step1-params.sh." >&2
+  exit 1
+fi
+
 for group in "${MODEL_GROUPS[@]}"; do
   service_url="${MODEL_SERVICE_URLS[$group]:-}"
   api_key="${MODEL_API_KEYS[$group]:-}"
@@ -87,4 +96,13 @@ for group in "${MODEL_GROUPS[@]}"; do
   create_or_update_nv "openai-api-key-${group}" "$api_key" true "openai-api-key-${group}"
 done
 
-printf 'Named Values processed for groups: %s\n' "${MODEL_GROUPS[*]}"
+for endpoint in "${CLIENT_ENDPOINTS[@]}"; do
+  client_key="${CLIENT_ENDPOINT_KEYS[$endpoint]:-}"
+  if [[ -z "$client_key" ]]; then
+    echo "CLIENT_ENDPOINT_KEYS[$endpoint] is empty. Load the client API key from a file in scripts/step1-params.sh." >&2
+    exit 1
+  fi
+  create_or_update_nv "client-api-key-${endpoint}" "$client_key" true "client-api-key-${endpoint}"
+done
+
+printf 'Named Values processed for groups: %s and endpoints: %s\n' "${MODEL_GROUPS[*]}" "${CLIENT_ENDPOINTS[*]}"

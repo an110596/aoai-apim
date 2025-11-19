@@ -37,7 +37,7 @@ fi
 
 APIM_POLICY_API_VERSION="${APIM_POLICY_API_VERSION:-2023-05-01-preview}"
 
-REQUIRED_VARS=(RG_NAME APIM_NAME MODEL_GROUPS)
+REQUIRED_VARS=(RG_NAME APIM_NAME MODEL_GROUPS CLIENT_ENDPOINTS)
 for var in "${REQUIRED_VARS[@]}"; do
   if [[ -z "${!var:-}" ]]; then
     echo "Environment variable ${var} is empty. Update scripts/step1-params.sh and source it again." >&2
@@ -47,6 +47,10 @@ done
 
 if [[ ${#MODEL_GROUPS[@]} -eq 0 ]]; then
   echo "MODEL_GROUPS is empty; specify at least one group in scripts/step1-params.sh." >&2
+  exit 1
+fi
+if [[ ${#CLIENT_ENDPOINTS[@]} -eq 0 ]]; then
+  echo "CLIENT_ENDPOINTS is empty; configure at least one endpoint/key pair in scripts/step1-params.sh." >&2
   exit 1
 fi
 
@@ -79,14 +83,10 @@ emit_optional_block() {
   done <<< "$content"
 }
 
-for group in "${MODEL_GROUPS[@]}"; do
-  service_url="${MODEL_SERVICE_URLS[$group]:-}"
-  if [[ -z "$service_url" ]]; then
-    echo "MODEL_SERVICE_URLS[$group] is empty. Run Step 1 again." >&2
-    exit 1
-  fi
-  if [[ "$service_url" == *"<"*">"* ]]; then
-    echo "MODEL_SERVICE_URLS[$group] still contains placeholder brackets. Update scripts/step1-params.sh." >&2
+for endpoint in "${CLIENT_ENDPOINTS[@]}"; do
+  group="${CLIENT_ENDPOINT_GROUPS[$endpoint]:-}"
+  if [[ -z "$group" ]]; then
+    echo "CLIENT_ENDPOINT_GROUPS[$endpoint] is empty. Map endpoints to model groups in scripts/step1-params.sh." >&2
     exit 1
   fi
 
@@ -101,12 +101,16 @@ for group in "${MODEL_GROUPS[@]}"; do
     exit 1
   fi
 
-  if ! api_id=$(get_optional_value MODEL_API_IDS "$group"); then
-    api_id="aoai-${group}"
+  client_nv="client-api-key-${endpoint}"
+  backend_service_nv="openai-service-url-${group}"
+  backend_key_nv="openai-api-key-${group}"
+
+  if ! api_id=$(get_optional_value CLIENT_ENDPOINT_API_IDS "$endpoint"); then
+    api_id="aoai-${endpoint}"
   fi
 
   if ! az apim api show --resource-group "$RG_NAME" --service-name "$APIM_NAME" --api-id "$api_id" >/dev/null 2>&1; then
-    echo "API ${api_id} not found in APIM ${APIM_NAME}. Ensure Step 4 completed successfully." >&2
+    echo "API ${api_id} (endpoint ${endpoint}) not found in APIM ${APIM_NAME}. Ensure Step 4 completed successfully." >&2
     exit 1
   fi
 
@@ -123,9 +127,12 @@ for group in "${MODEL_GROUPS[@]}"; do
     done
     printf '    </ip-filter>\n'
     printf '    <ip-filter action="forbid" />\n'
-    printf '    <set-backend-service base-url="{{openai-service-url-%s}}" />\n' "$group"
+    printf '    <check-header name="api-key" failed-check-httpcode="401" failed-check-error-message="Invalid API key.">\n'
+    printf '      <value>{{%s}}</value>\n' "$client_nv"
+    printf '    </check-header>\n'
+    printf '    <set-backend-service base-url="{{%s}}" />\n' "$backend_service_nv"
     printf '    <set-header name="api-key" exists-action="override">\n'
-    printf '      <value>{{openai-api-key-%s}}</value>\n' "$group"
+    printf '      <value>{{%s}}</value>\n' "$backend_key_nv"
     printf '    </set-header>\n'
     emit_optional_block "    " "${MODEL_POLICY_EXTRA_INBOUND[$group]:-}"
     printf '  </inbound>\n'
@@ -144,7 +151,7 @@ for group in "${MODEL_GROUPS[@]}"; do
     printf '</policies>\n'
   } > "$policy_file"
 
-  printf 'Applying policy for API %s (group %s)...\n' "$api_id" "$group"
+  printf 'Applying policy for API %s (endpoint %s, group %s)...\n' "$api_id" "$endpoint" "$group"
   policy_uri="https://management.azure.com/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}/providers/Microsoft.ApiManagement/service/${APIM_NAME}/apis/${api_id}/policies/policy?api-version=${APIM_POLICY_API_VERSION}"
   az rest \
     --method put \
@@ -156,4 +163,4 @@ for group in "${MODEL_GROUPS[@]}"; do
   trap - EXIT
 done
 
-printf 'Policies applied for groups: %s\n' "${MODEL_GROUPS[*]}"
+printf 'Policies applied for endpoints: %s\n' "${CLIENT_ENDPOINTS[*]}"

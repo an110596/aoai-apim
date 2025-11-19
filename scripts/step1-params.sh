@@ -23,12 +23,13 @@ export PUBLISHER_EMAIL="aoai-admin@example.com"
 
 # ---- Model groups and per-group backend wiring ----
 export OPENAI_API_VERSION="${OPENAI_API_VERSION:-2024-02-15-preview}"
-MODEL_GROUPS=("team-a" "team-b")
+MODEL_GROUPS=("aoai-endpoint-1" "aoai-endpoint-2" "aoai-endpoint-3")
 
 # Map each group to its Azure OpenAI deployment endpoint (must end with a slash).
 declare -Ag MODEL_SERVICE_URLS=(
-  ["team-a"]="https://<your-openai-team-a>.openai.azure.com/openai/deployments/gpt-4o/"
-  ["team-b"]="https://<your-openai-team-b>.openai.azure.com/openai/deployments/gpt-4o-mini/"
+  ["aoai-endpoint-1"]="https://<your-openai-endpoint-1>.openai.azure.com/openai/deployments/gpt-4o/"
+  ["aoai-endpoint-2"]="https://<your-openai-endpoint-2>.openai.azure.com/openai/deployments/gpt-4o/"
+  ["aoai-endpoint-3"]="https://<your-openai-endpoint-3>.openai.azure.com/openai/deployments/gpt-4o-mini/"
 )
 
 # Optional override for API version per group.
@@ -36,57 +37,55 @@ declare -Ag MODEL_API_VERSIONS=(
   # ["team-a"]="2024-08-01-preview"
 )
 
-# Map each group to its OpenAI API key (leave empty and load securely if you prefer).
+# Map each group to its OpenAI API key (load securely from files to avoid committing secrets).
 declare -Ag MODEL_API_KEYS=(
-  # ["team-a"]="$(<"${HOME}/secrets/team-a-openai-key.txt")"
-  # ["team-b"]="$(<"${HOME}/secrets/team-b-openai-key.txt")"
+  ["aoai-endpoint-1"]="$(<\"${HOME}/secrets/aoai-endpoint-1.key\")"
+  ["aoai-endpoint-2"]="$(<\"${HOME}/secrets/aoai-endpoint-2.key\")"
+  ["aoai-endpoint-3"]="$(<\"${HOME}/secrets/aoai-endpoint-3.key\")"
 )
 
 # Space-separated IP addresses or CIDR blocks allowed to call the APIM endpoint per group.
 declare -Ag MODEL_ALLOWED_IPS=(
-  ["team-a"]="<team-a-allow-ip-1> <team-a-allow-cidr-2>"
-  ["team-b"]="<team-b-allow-ip-1>"
+  ["aoai-endpoint-1"]="<endpoint-1-allow-ip-1> <endpoint-1-allow-cidr-2>"
+  ["aoai-endpoint-2"]="<endpoint-2-allow-ip-1>"
+  ["aoai-endpoint-3"]="<endpoint-3-allow-ip-1>"
 )
 
-# Subscriptions (display names) per group. Leave blank to skip creation in Step 6.
-# Use newline-separated values if the display name itself contains spaces.
-declare -Ag MODEL_SUBSCRIPTIONS=(
-  ["team-a"]=$'sub-team-a-alice\nsub-team-a-bob'
-  ["team-b"]="sub-team-b-carol"
+# ---- Consumer endpoints (1:1 with client keys) ----
+CLIENT_ENDPOINTS=("key-a" "key-b" "key-c" "key-d" "key-e" "key-f" "key-g")
+
+declare -Ag CLIENT_ENDPOINT_GROUPS=(
+  ["key-a"]="aoai-endpoint-1"
+  ["key-b"]="aoai-endpoint-1"
+  ["key-c"]="aoai-endpoint-1"
+  ["key-d"]="aoai-endpoint-2"
+  ["key-e"]="aoai-endpoint-2"
+  ["key-f"]="aoai-endpoint-3"
+  ["key-g"]="aoai-endpoint-3"
 )
 
-# Optional overrides for subscription metadata keyed by display name.
-declare -Ag MODEL_SUBSCRIPTION_IDS=(
-  # ["sub-team-a-alice"]="sub-team-a-alice"
-)
-declare -Ag MODEL_SUBSCRIPTION_STATES=(
-  # ["sub-team-a-alice"]="active"
-)
-declare -Ag MODEL_SUBSCRIPTION_PRIMARY_KEYS=()
-declare -Ag MODEL_SUBSCRIPTION_SECONDARY_KEYS=()
-
-# Map each subscription display name to the APIM user ID that should own it.
-declare -Ag MODEL_SUBSCRIPTION_USER_IDS=(
-  ["sub-team-a-alice"]="user-team-a-alice"
-  ["sub-team-a-bob"]="user-team-a-bob"
-  ["sub-team-b-carol"]="user-team-b-carol"
+declare -Ag CLIENT_ENDPOINT_KEYS=(
+  ["key-a"]="$(<\"${HOME}/secrets/client-key-a.txt\")"
+  ["key-b"]="$(<\"${HOME}/secrets/client-key-b.txt\")"
+  ["key-c"]="$(<\"${HOME}/secrets/client-key-c.txt\")"
+  ["key-d"]="$(<\"${HOME}/secrets/client-key-d.txt\")"
+  ["key-e"]="$(<\"${HOME}/secrets/client-key-e.txt\")"
+  ["key-f"]="$(<\"${HOME}/secrets/client-key-f.txt\")"
+  ["key-g"]="$(<\"${HOME}/secrets/client-key-g.txt\")"
 )
 
-# Per-APIM-user metadata keyed by user ID. Update these values for your environment.
-declare -Ag MODEL_APIM_USER_EMAILS=(
-  ["user-team-a-alice"]="alice@example.com"
-  ["user-team-a-bob"]="bob@example.com"
-  ["user-team-b-carol"]="carol@example.com"
+# Optional overrides per endpoint (defaults documented in README)
+declare -Ag CLIENT_ENDPOINT_PATHS=(
+  ["key-a"]="openai/key-a"
+  ["key-b"]="openai/key-b"
+  ["key-c"]="openai/key-c"
+  ["key-d"]="openai/key-d"
+  ["key-e"]="openai/key-e"
+  ["key-f"]="openai/key-f"
+  ["key-g"]="openai/key-g"
 )
-declare -Ag MODEL_APIM_USER_ACCOUNT_NAMES=(
-  ["user-team-a-alice"]="team-a-alice"
-  ["user-team-a-bob"]="team-a-bob"
-  ["user-team-b-carol"]="team-b-carol"
-)
-declare -Ag MODEL_APIM_USER_STATES=(
-  # ["user-team-a-alice"]="active"
-)
-declare -Ag MODEL_APIM_USER_NOTES=()
+declare -Ag CLIENT_ENDPOINT_API_IDS=()
+declare -Ag CLIENT_ENDPOINT_API_DISPLAY_NAMES=()
 
 # Optional policy fragments to append inside each section.
 declare -Ag MODEL_POLICY_EXTRA_INBOUND=(
@@ -97,31 +96,10 @@ declare -Ag MODEL_POLICY_EXTRA_OUTBOUND=()
 declare -Ag MODEL_POLICY_EXTRA_ON_ERROR=()
 
 # ---- Validation to avoid silent misconfiguration ----
-split_subscription_list() {
-  local raw="$1"
-  local -n ref="$2"
-  ref=()
-
-  if [[ -z "$raw" ]]; then
-    return 0
-  fi
-
-  if [[ "$raw" == *$'\n'* ]]; then
-    while IFS= read -r line || [[ -n "$line" ]]; do
-      line="${line%$'\r'}"
-      if [[ -n "${line//[[:space:]]/}" ]]; then
-        ref+=("$line")
-      fi
-    done <<< "$raw"
-  else
-    read -r -a tokens <<< "$raw"
-    for token in "${tokens[@]}"; do
-      if [[ -n "$token" ]]; then
-        ref+=("$token")
-      fi
-    done
-  fi
-}
+if [[ ${#MODEL_GROUPS[@]} -eq 0 ]]; then
+  echo "MODEL_GROUPS is empty. Configure at least one Azure OpenAI deployment group." >&2
+  return 1
+fi
 
 for group in "${MODEL_GROUPS[@]}"; do
   if [[ -z "${MODEL_SERVICE_URLS[$group]:-}" ]]; then
@@ -157,48 +135,42 @@ for group in "${MODEL_GROUPS[@]}"; do
       return 1
     fi
   done
-
-  subs="${MODEL_SUBSCRIPTIONS[$group]:-}"
-  if [[ -z "$subs" ]]; then
-    continue
-  fi
-  subscription_names=()
-  split_subscription_list "$subs" subscription_names
-  if [[ ${#subscription_names[@]} -eq 0 ]]; then
-    echo "MODEL_SUBSCRIPTIONS[${group}] has no entries after parsing." >&2
-    return 1
-  fi
-  for display_name in "${subscription_names[@]}"; do
-    owner_id="${MODEL_SUBSCRIPTION_USER_IDS[$display_name]:-}"
-    if [[ -z "$owner_id" ]]; then
-      echo "MODEL_SUBSCRIPTION_USER_IDS[${display_name}] is empty. Map each subscription to an APIM user ID." >&2
-      return 1
-    fi
-    if [[ "$owner_id" == *"<"*">"* ]]; then
-      echo "MODEL_SUBSCRIPTION_USER_IDS[${display_name}] still contains placeholder brackets. Update it." >&2
-      return 1
-    fi
-
-    email="${MODEL_APIM_USER_EMAILS[$owner_id]:-}"
-    account_name="${MODEL_APIM_USER_ACCOUNT_NAMES[$owner_id]:-}"
-
-    if [[ -z "$email" ]]; then
-      echo "MODEL_APIM_USER_EMAILS[${owner_id}] is empty. Provide the APIM user email address." >&2
-      return 1
-    fi
-    if [[ "$email" == *"<"*">"* ]]; then
-      echo "MODEL_APIM_USER_EMAILS[${owner_id}] still contains placeholder brackets. Update it." >&2
-      return 1
-    fi
-    if [[ -z "$account_name" ]]; then
-      echo "MODEL_APIM_USER_ACCOUNT_NAMES[${owner_id}] is empty. Provide the APIM user account name." >&2
-      return 1
-    fi
-    if [[ "$account_name" == *"<"*">"* ]]; then
-      echo "MODEL_APIM_USER_ACCOUNT_NAMES[${owner_id}] still contains placeholder brackets. Update it." >&2
-      return 1
-    fi
-  done
 done
 
-echo "Loaded Step 1 parameters for groups: ${MODEL_GROUPS[*]}"
+if [[ ${#CLIENT_ENDPOINTS[@]} -eq 0 ]]; then
+  echo "CLIENT_ENDPOINTS is empty. Define at least one client-facing endpoint/key pair." >&2
+  return 1
+fi
+
+for endpoint in "${CLIENT_ENDPOINTS[@]}"; do
+  group="${CLIENT_ENDPOINT_GROUPS[$endpoint]:-}"
+  if [[ -z "$group" ]]; then
+    echo "CLIENT_ENDPOINT_GROUPS[${endpoint}] is empty. Map each endpoint to a model group." >&2
+    return 1
+  fi
+
+  group_found=false
+  for defined_group in "${MODEL_GROUPS[@]}"; do
+    if [[ "$defined_group" == "$group" ]]; then
+      group_found=true
+      break
+    fi
+  done
+  if [[ "$group_found" != true ]]; then
+    echo "CLIENT_ENDPOINT_GROUPS[${endpoint}] references unknown group '${group}'." >&2
+    return 1
+  fi
+
+  client_key="${CLIENT_ENDPOINT_KEYS[$endpoint]:-}"
+  if [[ -z "$client_key" ]]; then
+    echo "CLIENT_ENDPOINT_KEYS[${endpoint}] is empty. Provide the client-facing API key value." >&2
+    return 1
+  fi
+  if [[ "$client_key" == *"<"*">"* ]]; then
+    echo "CLIENT_ENDPOINT_KEYS[${endpoint}] still contains placeholder brackets. Update it." >&2
+    return 1
+  fi
+
+done
+
+echo "Loaded Step 1 parameters for groups: ${MODEL_GROUPS[*]} (endpoints: ${CLIENT_ENDPOINTS[*]})"
